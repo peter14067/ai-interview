@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { GearIcon } from "@/components/icons";
 
 const navLinks = [
   { href: "/#features", label: "產品特色" },
@@ -31,12 +32,21 @@ export function Header() {
           ))}
         </nav>
 
-        <Link
-          href="/interview"
-          className="rounded-full bg-gradient-to-r from-brand to-accent px-5 py-2 text-sm font-semibold text-white shadow-sm shadow-brand/30 transition-transform hover:scale-[1.03]"
-        >
-          開始模擬面試
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/settings"
+            aria-label="設定"
+            className="flex h-9 w-9 items-center justify-center rounded-full text-zinc-500 transition-colors hover:bg-black/5 hover:text-black dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white"
+          >
+            <GearIcon className="h-5 w-5" />
+          </Link>
+          <Link
+            href="/interview"
+            className="rounded-full bg-gradient-to-r from-brand to-accent px-5 py-2 text-sm font-semibold text-white shadow-sm shadow-brand/30 transition-transform hover:scale-[1.03]"
+          >
+            開始模擬面試
+          </Link>
+        </div>
       </div>
     </header>
   );

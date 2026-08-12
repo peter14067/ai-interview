@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { openai, OPENAI_MODEL } from "@/lib/openai";
+import { createOpenAIClient, OPENAI_MODEL } from "@/lib/openai";
 
 // 沒有指定題數時的預設題數
 const DEFAULT_TOTAL_QUESTIONS = 3;
@@ -19,6 +19,7 @@ type RequestBody = {
   jobDescription: string; // 職缺描述，用來讓 AI 扮演這個職缺的面試官
   history: ChatMessage[]; // 到目前為止的完整對話紀錄（不含 system prompt）
   totalQuestions: number; // 使用者設定要問幾題
+  apiKey: string; // BYOK：使用者自己輸入的 OpenAI API Key，伺服器不保存
 };
 
 // type guard：檢查一個不明的值是否符合 ChatMessage 的形狀
@@ -43,6 +44,11 @@ function parseBody(body: unknown): RequestBody | null {
     return null;
   }
 
+  // apiKey 必須是非空字串（BYOK，由使用者自行輸入）
+  if (typeof b.apiKey !== "string" || !b.apiKey.trim()) {
+    return null;
+  }
+
   // history 必須是陣列，且每一個元素都要通過 isChatMessage 驗證
   if (!Array.isArray(b.history) || !b.history.every(isChatMessage)) {
     return null;
@@ -61,17 +67,25 @@ function parseBody(body: unknown): RequestBody | null {
     );
   }
 
-  return { jobDescription: b.jobDescription, history: b.history, totalQuestions };
+  return {
+    jobDescription: b.jobDescription,
+    history: b.history,
+    totalQuestions,
+    apiKey: b.apiKey.trim(),
+  };
 }
 
 // 請 AI 扮演面試官，根據職缺描述 + 目前的對話紀錄，出下一題
 // questionNumber：這是第幾題（從 1 開始），純粹用來塞進 prompt 讓 AI 知道進度，也回傳給前端顯示「問題 X / Y」
 async function askQuestion(
+  apiKey: string,
   jobDescription: string,
   history: ChatMessage[],
   questionNumber: number,
   totalQuestions: number
 ) {
+  const openai = createOpenAIClient(apiKey);
+
   // system prompt：設定 AI 的角色、任務、以及輸出格式的限制
   // 特別要求「只輸出問題本身」，避免 AI 加上「好的，第一題是...」這類多餘前綴
   const systemPrompt = `你是一位專業的技術面試官，正在對應徵「${jobDescription}」職位的求職者進行模擬面試。
@@ -104,10 +118,13 @@ async function askQuestion(
 
 // 面試全部題目問完（使用者也都回答完）之後，請 AI 根據完整對話紀錄做總評
 async function evaluateInterview(
+  apiKey: string,
   jobDescription: string,
   history: ChatMessage[],
   totalQuestions: number
 ) {
+  const openai = createOpenAIClient(apiKey);
+
   // 把對話紀錄拆成「AI 問的題目」跟「使用者的回答」兩個陣列
   // 因為對話是一問一答交替出現，所以 questions[i] 對應的答案就是 answers[i]
   const questions = history
@@ -184,12 +201,12 @@ export async function POST(req: NextRequest) {
   const body = parseBody(json);
   if (!body) {
     return NextResponse.json(
-      { error: "缺少 jobDescription 或 history/totalQuestions 格式錯誤" },
+      { error: "缺少 jobDescription、apiKey，或 history/totalQuestions 格式錯誤" },
       { status: 400 }
     );
   }
 
-  const { jobDescription, history, totalQuestions } = body;
+  const { jobDescription, history, totalQuestions, apiKey } = body;
 
   // 核心邏輯：用「history 裡 assistant 訊息的數量」代表「目前已經問過幾題」
   // - 第一次呼叫：history 是空陣列 → assistantQuestionCount = 0 → 出第 1 題
@@ -203,9 +220,10 @@ export async function POST(req: NextRequest) {
 
   try {
     if (assistantQuestionCount >= totalQuestions) {
-      return await evaluateInterview(jobDescription, history, totalQuestions);
+      return await evaluateInterview(apiKey, jobDescription, history, totalQuestions);
     }
     return await askQuestion(
+      apiKey,
       jobDescription,
       history,
       assistantQuestionCount + 1,
@@ -214,6 +232,27 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     // 統一捕捉 OpenAI API 呼叫失敗（額度用完、網路錯誤、JSON.parse 失敗等）
     console.error("Interview API error:", error);
+
+    // OpenAI SDK 的錯誤物件會帶 status（例如 401 = API Key 無效、429 = 額度用盡）
+    // 針對這類使用者可自行排除的錯誤，回傳更明確的訊息，而不是統一的「發生錯誤」
+    const status =
+      error && typeof error === "object" && "status" in error
+        ? (error as { status?: unknown }).status
+        : undefined;
+
+    if (status === 401) {
+      return NextResponse.json(
+        { error: "OpenAI API Key 無效，請到「設定」重新確認你的 Key" },
+        { status: 401 }
+      );
+    }
+    if (status === 429) {
+      return NextResponse.json(
+        { error: "OpenAI API 額度已用盡或請求過於頻繁，請稍後再試" },
+        { status: 429 }
+      );
+    }
+
     return NextResponse.json(
       { error: "呼叫 OpenAI API 時發生錯誤" },
       { status: 500 }

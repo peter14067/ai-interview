@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { getStoredApiKey } from "@/lib/apiKey";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -44,12 +46,19 @@ export default function InterviewPage() {
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // BYOK：從瀏覽器 localStorage 讀取使用者在「設定」頁面存的 OpenAI API Key
+  const [apiKey, setApiKey] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, stage]);
+
+  // 用 null 代表「還沒讀取」，空字串代表「讀取完成但沒有設定 Key」，避免畫面閃一下「未設定」的提示
+  useEffect(() => {
+    setApiKey(getStoredApiKey());
+  }, []);
 
   async function callInterviewApi(history: ChatMessage[]) {
     setLoading(true);
@@ -58,7 +67,7 @@ export default function InterviewPage() {
       const res = await fetch("/api/interview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobDescription, history, totalQuestions }),
+        body: JSON.stringify({ jobDescription, history, totalQuestions, apiKey }),
       });
 
       if (!res.ok) {
@@ -89,7 +98,7 @@ export default function InterviewPage() {
   }
 
   function handleStart() {
-    if (!jobDescription.trim()) return;
+    if (!jobDescription.trim() || !apiKey?.trim()) return;
     setStage("interviewing");
     setMessages([]);
     setEvaluation(null);
@@ -129,6 +138,15 @@ export default function InterviewPage() {
             AI 模擬面試
           </h1>
         </div>
+
+        {stage === "setup" && apiKey !== null && !apiKey.trim() && (
+          <div className="mb-5 flex flex-col gap-2 rounded-2xl border border-amber-300/50 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+            <p>開始之前，請先到「設定」頁面填入你自己的 OpenAI API Key。</p>
+            <Link href="/settings" className="w-fit font-medium underline underline-offset-2">
+              前往設定
+            </Link>
+          </div>
+        )}
 
         {stage === "setup" && (
           <div className={`${card} flex flex-col gap-5`}>
@@ -175,7 +193,7 @@ export default function InterviewPage() {
 
             <button
               onClick={handleStart}
-              disabled={!jobDescription.trim() || loading}
+              disabled={!jobDescription.trim() || !apiKey?.trim() || loading}
               className={`${primaryButton} self-start`}
             >
               {loading ? "準備中..." : "開始模擬面試"}
